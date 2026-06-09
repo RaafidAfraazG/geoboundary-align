@@ -76,7 +76,7 @@ On `data/34855_vadnerbhairav_chandavad_nashik`:
 - median centroid error = 5.165 m
 - Spearman(conf, IoU) = 0.949
 
-## AI Assistance
+## Transcript
 
-AI assistance was used during development. Transcript links are listed in
+Transcript links are listed in
 `transcripts/README.md`.
