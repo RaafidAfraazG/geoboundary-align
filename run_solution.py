@@ -286,22 +286,47 @@ def choose_shift(
     return best, runner_up, margin
 
 
+def boundary_signal_quality(signal_fraction: float) -> float:
+    """Down-weight patches with too little signal or overly dense/noisy hints."""
+    if signal_fraction <= 0:
+        return 0.0
+    enough_signal = min(1.0, signal_fraction / 0.015)
+    not_too_dense = min(1.0, 0.12 / signal_fraction)
+    return math.sqrt(enough_signal * not_too_dense)
+
+
 def confidence_from(
     best: Candidate,
     gain_over_start: float,
     margin: float,
     max_shift_m: float,
+    signal_quality: float,
     corrected: bool,
 ) -> float:
     shift_frac = min(1.0, math.hypot(best.dx, best.dy) / max_shift_m)
-    if not corrected:
-        return round(max(0.0, min(0.49, 0.12 + 0.9 * max(0.0, gain_over_start) + 2.0 * margin)), 3)
+    score_strength = min(1.0, max(0.0, best.edge_score - 0.18) / 0.55)
+    gain_strength = min(1.0, max(0.0, gain_over_start) / 0.22)
+    margin_strength = min(1.0, margin / 0.035)
+    shift_strength = max(0.0, 1.0 - shift_frac**1.4)
 
-    conf = 0.34 + 0.35 * best.edge_score + 1.6 * gain_over_start + 2.2 * margin
-    conf -= 0.18 * shift_frac**1.5
-    if shift_frac > 0.75:
+    if not corrected:
+        conf = 0.08 + 0.20 * score_strength + 0.12 * gain_strength + 0.08 * margin_strength
+        conf *= max(0.35, signal_quality)
+        return round(max(0.0, min(0.49, conf)), 3)
+
+    conf = (
+        0.42
+        + 0.14 * score_strength
+        + 0.12 * gain_strength
+        + 0.30 * margin_strength
+        + 0.08 * signal_quality
+        + 0.08 * shift_strength
+    )
+    if shift_frac > 0.55 and margin_strength < 0.35:
         conf = min(conf, 0.72)
-    return round(max(0.5, min(0.9, conf)), 3)
+    if signal_quality < 0.45:
+        conf = min(conf, 0.68)
+    return round(max(0.5, min(0.92, conf)), 3)
 
 
 def build_predictions(
@@ -384,16 +409,33 @@ def build_predictions(
             gain_over_official = best.edge_score - official_score
             gain_over_start = best.edge_score - max(baseline_score, official_score)
             local_shift_m = math.hypot(best.dx, best.dy)
+            signal_quality = boundary_signal_quality(patch.signal_fraction)
 
             accept = (
                 best.edge_score >= 0.18
+                and signal_quality >= 0.25
                 and gain_over_baseline >= 0.025
                 and gain_over_official >= 0.015
                 and margin >= 0.004
                 and local_shift_m <= max_shift_m
             )
+            if official_score >= 0.50 and gain_over_official < 0.08:
+                accept = False
+            if baseline_score >= 0.60 and gain_over_baseline < 0.05:
+                accept = False
+            if local_shift_m > 0.55 * max_shift_m and margin < 0.008:
+                accept = False
+            if local_shift_m > 0.75 * max_shift_m and margin < 0.014:
+                accept = False
 
-            confidence = confidence_from(best, gain_over_start, margin, max_shift_m, corrected=accept)
+            confidence = confidence_from(
+                best,
+                gain_over_start,
+                margin,
+                max_shift_m,
+                signal_quality,
+                corrected=accept,
+            )
             if accept:
                 status = "corrected"
                 geom = translate(baseline_geom, best.dx, best.dy)
@@ -402,7 +444,7 @@ def build_predictions(
                     f"boundary alignment: global dx={mdx:.1f} dy={mdy:.1f}m from {n_shift} truths; "
                     f"local dx={best.dx:.1f} dy={best.dy:.1f}m; "
                     f"score {best.edge_score:.3f} vs base {baseline_score:.3f}, official {official_score:.3f}; "
-                    f"margin {margin:.3f}"
+                    f"margin {margin:.3f}; signal {signal_quality:.2f}"
                 )
             else:
                 status = "flagged"
@@ -411,7 +453,7 @@ def build_predictions(
                 note = (
                     f"flagged: weak or ambiguous boundary alignment; "
                     f"best {best.edge_score:.3f}, base {baseline_score:.3f}, official {official_score:.3f}, "
-                    f"margin {margin:.3f}, local shift {local_shift_m:.1f}m"
+                    f"margin {margin:.3f}, local shift {local_shift_m:.1f}m, signal {signal_quality:.2f}"
                 )
 
             rows.append(
