@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# temporary outputs
+patch_example.png
+
+# optional local/editor files
+.vscode/
